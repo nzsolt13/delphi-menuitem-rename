@@ -31,8 +31,8 @@ import unicodedata
 # Alap
 # ---------------------------------------------------------------------------
 
-MAX_LEN = 50          # nevek hatara (szo-keresztnel kevesbe)
-VAG_HAT = 48          # ha a kevesbe is MAX felet, ide vag (szo-keresztnel)
+MAX_LEN = 60          # nevek hatara (szo-keresztnel kevesbe)
+VAG_HAT = 58          # ha a kevesbe is MAX felet, ide vag (szo-keresztnel)
 
 SKIP_DIRS = {".git", "bin", "__pycache__", ".svn", ".hg"}
 

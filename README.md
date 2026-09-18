@@ -71,8 +71,8 @@ Az új név a captionból épül, `mi` prefixszel:
    captionje nincs a gyermek captionjében, akkor a szülő caption fold-olt neve
    prefixként bekapcsolódik – így kerül el a két azonos captionű menüpont
    ütközése.
-4. **Hossz-szabály** (>50 karakter): ilyenkor szavakban vágja, legfeljebb 48
-   karakterig, hogy olvasható maradjon.
+ 4. **Hossz-szabály** (>60 karakter): ilyenkor szavakban vágja, legfeljebb 58
+    karakterig, hogy olvasható maradjon.
 5. **Ütközés**: ha az így kapott név a formon belül máshol is fennáll (másik
    menüpont vagy bármely más azonosító), a szerszág `1`, `2`, … számot ad.
    A szülő-kontextus és a számozás együtt garantálja, hogy a formon belül két
