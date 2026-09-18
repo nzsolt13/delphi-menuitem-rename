@@ -1,0 +1,17 @@
+# Tenztfájlo (Delphi forrás)
+*.pas
+*.PAS
+*.dfm
+*.DFM
+
+# Riport/kimenet
+menu_rename_report.txt
+menu_rename_mapping.tsv
+
+# Biztonsági mentés
+*.bak
+*.bak-*
+
+# Python
+__pycache__/
+*.pyc
