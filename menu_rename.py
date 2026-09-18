@@ -14,6 +14,8 @@ TSV-t keszitelve (regi<TAB>uj), az adatbazis-kodoláshoz.
 Használat:
     python3 menu_rename.py <mapva>             # dry-run
     python3 menu_rename.py <mappa> --apply     # eles atneznes
+    python3 menu_rename.py <mappa> --keep-mi   # mar "mi..." nevu elemek atuj
+
 
 Dokumentáció: README.md
 """
@@ -266,7 +268,7 @@ def parner_pas(dfm):
 # Fő
 # ---------------------------------------------------------------------------
 
-def fo(mappa, apply):
+def fo(mappa, apply, keep_mi=False):
     mappa = os.path.abspath(mappa)
     files = fájlok(mappa)
     dfms = [f for f in files if f.lower().endswith(".dfm")]
@@ -313,6 +315,8 @@ def fo(mappa, apply):
         ren_item = {}
         for it in items:
             old = it["name"]
+            if keep_mi and old.lower().startswith("mi"):
+                continue
             new = generuj_nev(it["caption"],
                               byname[it["parent"]]["caption"] if it["parent"] and it["parent"] in byname else "",
                               "" )
@@ -416,16 +420,18 @@ def fo(mappa, apply):
 def main():
     args = sys.argv[1:]
     apply = "--apply" in args
-    args = [a for a in args if a != "--apply"]
+    keep_mi = "--keep-mi" in args
+    args = [a for a in args if a not in ("--apply", "--keep-mi")]
     if len(args) != 1 or not os.path.isdir(args[0]):
         print(__doc__)
-        print("használat: python3 menu_rename.py <mappa> [--apply]")
+        print("használat: python3 menu_rename.py <mappa> [--apply] [--keep-mi]")
         sys.exit(1)
     mappa = args[0]
     if not apply:
+        extra = ",  mi* nevek ertek" if keep_mi else ""
         print("=== DRY-RUN MODO ===  (csak raport,  semmit nem ír)  "
-              "--- --apply: eles atnevezés ===", "\n")
-    fo(mappa, apply)
+               "--- --apply: eles atnevezés ===" + extra, "\n")
+    fo(mappa, apply, keep_mi)
 
 
 if __name__ == "__main__":

@@ -22,12 +22,22 @@ Két kimenetet ír a cél mappába:
 ## Használat
 
 ```bash
-python3 menu_rename.py <mappa>             # DRY-RUN: csak riport/mapping, nem ír
-python3 menu_rename.py <mappa> --apply     # ÉLES: átnevezi a .pas és .dfm fájlokat
+python3 menu_rename.py <mappa>                   # DRY-RUN: csak riport/mapping, nem ír
+python3 menu_rename.py <mappa> --apply           # ÉLES: átnevezi a .pas és .dfm fájlokat
+python3 menu_rename.py <mappa> --keep-mi         # a már mi…-vel kezdődő nevek nem változnak
+python3 menu_rename.py <mappa> --apply --keep-mi # ÉLES + keep-mi
 ```
 
 `<mappa>` a Delphi projekt gyökerének elérési útja. A szerszág rekurzívan bejárt,
 `.git`, `bin`, `__pycache__` mappákat kihagyva.
+
+| flag | hatás |
+|------|-------|
+| `--apply` | írja a fájlokat (biztonsági másolattal) |
+| `--keep-mi` | az eddigi `mi…`-vel kezdődő menüpontok és eseménykezelőik kikerülik az átnevezést |
+
+`--keep-mi` akkor hasznos, ha egy korábbi futás már adott `mi…` nevet, amit most
+meg akarsz őrizni, miközben a többi (még generált nevű) elemet átnevezed.
 
 ### Biztonság
 
