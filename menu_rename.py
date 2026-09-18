@@ -90,7 +90,9 @@ def dekod_caption(s):
     return "".join(out)
 
 def fold_words(t):
-    """Ekezetet alap-ra csereli, szavakra bont (nem betu/szamot toli)."""
+    """Ekezetet alap-ra csereli, szavakra bont (nem betu/szamot toli).
+    A Delphi menutaj (&) nem szóhatár: "m&ásolás" egy szó."""
+    t = t.replace("&", "")
     t = "".join(c for c in unicodedata.normalize("NFD", t) if not unicodedata.combining(c))
     return re.findall(r"[A-Za-z0-9]+", t)
 
