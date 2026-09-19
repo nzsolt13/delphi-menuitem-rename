@@ -90,9 +90,32 @@ def decode_caption(s, codepage: str = "cp1250"):
             out.append(lit.replace("''", "'"))
     return "".join(out)
 
+# Letters that have no NFD decomposition (true characters, not base+diacritic);
+# map them to an ASCII form before stripping so they become usable letters.
+NON_DECOMPOSED = {
+    "\u00DF": "ss",  # ß  German sharp s
+    "\u00FE": "th",  # þ  (Þorn)
+    "\u00C6": "AE",  # Æ  ligature
+    "\u00E6": "ae",
+    "\u00D0": "D",   # Ð
+    "\u00F0": "d",
+    "\u00F8": "o",   # ø
+    "\u00E5": "a",   # å
+    "\u0110": "D",   # Đ
+    "\u0111": "d",
+    "\u0141": "L",   # Ł
+    "\u0142": "l",
+    "\u0195": "T",   # Ŕ
+    "\u0196": "t",   # ŕ
+    "\u0192": "f",   # ƒ
+    "\u0131": "i",   # ı (Turkish dotless i)
+    "\u1E9E": "SS",  # ẞ (capital sharp S)
+}
+
 def fold_words(t):
     """Strips accents (maps to base letters) and splits into words.
     The Delphi mnemonic marker '&' is not a word boundary: 'm&ásolás' -> one word."""
+    t = "".join(NON_DECOMPOSED.get(c, c) for c in t)
     t = t.replace("&", "")
     t = "".join(c for c in unicodedata.normalize("NFD", t) if not unicodedata.combining(c))
     return re.findall(r"[A-Za-z0-9]+", t)
