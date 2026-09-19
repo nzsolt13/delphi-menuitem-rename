@@ -114,7 +114,7 @@ NON_DECOMPOSED = {
 
 def fold_words(t):
     """Strips accents (maps to base letters) and splits into words.
-    The Delphi mnemonic marker '&' is not a word boundary: 'm&ásolás' -> one word."""
+    The Delphi mnemonic marker '&' is not a word boundary: 'm&enu' -> one word."""
     t = "".join(NON_DECOMPOSED.get(c, c) for c in t)
     t = t.replace("&", "")
     t = "".join(c for c in unicodedata.normalize("NFD", t) if not unicodedata.combining(c))
