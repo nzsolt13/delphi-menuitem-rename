@@ -77,9 +77,9 @@ want to keep, while still renaming the remaining (still-generated) names.
 The new name is built from the caption, prefixed with `mi`:
 
 1. **Deaccent**: accented letters are mapped to their base form (á→a, é→e,
-   í→i, ó→o, ú→u, ö/ő→o, ü/ű→u); other non-alphabetic characters (space,
-   punctuation, parentheses, `&`, …) are discarded. "Összesen (nettó)" →
-   `OsszesenNetto`.
+   í→i, ó→o, ú→u, ö/ő→o, ü/ű→u, ä→a, ñ→n, ç→c, ß→ss, ø→o, å→a, æ→ae,
+   Ł→L, Đ→D); other non-alphabetic characters (space, punctuation,
+   parentheses, `&`, …) are discarded. "Összesen (nettó)" → `OsszesenNetto`.
 2. **PascalCase**: each word is capitalized.
 3. **Parent context**: if the direct parent is also a menu item and the
    child's caption does not already start with the parent's caption, the
