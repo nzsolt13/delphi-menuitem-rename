@@ -1,23 +1,25 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-menu_rename.py - Delphi TMenuItem atnevezó.
+menu_rename.py - Renames Delphi TMenuItem components.
 
-A Delphi Designer generált menuitem-ek nevében az ekezetes caption
-ekezetes karaktereit lecsonkolja: pl. "Oszzesen (netto)" a
-"sszesen1", "Sugo" a "Sg1" lett. Ez a szam rekurzivan atnez az
-atadott mappaban talalt .pas / .dfm file-ok minden TMenuItem-jét
-(separatoron kivul) caption-alap, ekezet nelkuli "mi..." erezve,
-esemenykezeloikkel (OnClick, OnDblClick, stb.) ketten, riportot es
-TSV-t keszitelve (regi<TAB>uj), az adatbazis-kodoláshoz.
+The Delphi Designer strips non-ASCII characters out of generated
+menu-item names, so accented captions get mangled: e.g.
+"Oszzesen (netto)" becomes "sszen1", "Sugo" becomes "Sg1".
+This tool walks the given directory recursively, renames every
+TMenuItem (except separators) to a clean accented-free "mi..." name
+derived from its caption, together with its event handlers
+(OnClick, OnDblClick, etc.), and writes a report and a TSV
+(old<TAB>new) for database migration.
 
-Használat:
-    python3 menu_rename.py <mapva>             # dry-run
-    python3 menu_rename.py <mappa> --apply     # eles atneznes
-    python3 menu_rename.py <mappa> --keep-mi   # mar "mi..." nevu elemek atuj
+Usage:
+    python3 menu_rename.py <dir>                    # dry-run (no writes)
+    python3 menu_rename.py <dir> --apply            # live rename
+    python3 menu_rename.py <dir> --keep-mi          # keep items already named mi...
+    python3 menu_rename.py <dir> --codepage cp1251  # decode #ddd with cp1251
+      (codepage default: cp1250; any Python name like cp1251/cp1252 works)
 
-
-Dokumentáció: README.md
+See README.md for details.
 """
 
 import os
@@ -28,11 +30,11 @@ import datetime
 import unicodedata
 
 # ---------------------------------------------------------------------------
-# Alap
+# Basics
 # ---------------------------------------------------------------------------
 
-MAX_LEN = 60          # nevek hatara (szo-keresztnel kevesbe)
-VAG_HAT = 58          # ha a kevesbe is MAX felet, ide vag (szo-keresztnel)
+MAX_LEN = 60          # name length limit (stop below this at a word boundary)
+VAG_HAT = 58          # if a word still exceeds MAX_LEN, cut down to this
 
 SKIP_DIRS = {".git", "bin", "__pycache__", ".svn", ".hg"}
 
@@ -48,50 +50,49 @@ DELPHI_KEYWORDS = {
 }
 
 # ---------------------------------------------------------------------------
-# Karakterkódolás
+# Character encoding
 # ---------------------------------------------------------------------------
 
-def detekt_enc(raw: bytes) -> str:
+def detect_encoding(raw: bytes, fallback: str = "cp1250") -> str:
     if raw[:3] == b"\xef\xbb\xbf":
         return "utf-8-sig"
-    # cp1250 magyar karakterek: 0xF5 (ő) 0xF6 (ö) 0xF7 (ő) 0xFB (ű)
-    # Ezek UTF-8-ban nem multibyte, hanem "lone byte" - ha van ilyen,
-    # a fájl UTF-8-ban érvénytelen -> cp1250.
+    # Bytes that are not valid UTF-8 are decoded with the fallback code page
+    # (cp1250 by default; pass another, e.g. cp1251, via --codepage).
     try:
-        t = raw.decode("utf-8")
-        if any(b > 0x7F for b in raw):
-            # Nem-ASCII tartalom: UTF8-ban csak multibyte-ok (0xCx 0x8x-0xBF)
-            # Ha vannak lone 0xF5-0xFA, a utf-8 decode elbukik vagy érvénytelen.
-            return "utf-8"
+        raw.decode("utf-8")
         return "utf-8"
     except UnicodeDecodeError:
-        return "cp1250"
+        return fallback
 
 
-def leolvas(path):
+def read_file(path, fallback: str = "cp1250"):
     raw = open(path, "rb").read()
-    enc = detekt_enc(raw)
+    enc = detect_encoding(raw, fallback)
     return raw.decode(enc), enc
 
-def beiras(path, text, enc):
+def write_file(path, text, enc):
     open(path, "wb").write(text.encode(enc))
 
 # ---------------------------------------------------------------------------
-# DFM dekodolás
+# DFM decoding / caption helpers
 # ---------------------------------------------------------------------------
 
-def dekod_caption(s):
+def decode_caption(s, codepage: str = "cp1250"):
     out = []
     for num, lit in re.findall(r"#(\d+)|'((?:[^']|'')*)'", s):
         if num:
-            out.append(chr(int(num)))
+            val = int(num)
+            if 0 <= val <= 255:
+                out.append(bytes([val]).decode(codepage, errors="replace"))
+            else:
+                out.append(chr(val))   # Unicode DFM escape
         else:
             out.append(lit.replace("''", "'"))
     return "".join(out)
 
 def fold_words(t):
-    """Ekezetet alap-ra csereli, szavakra bont (nem betu/szamot toli).
-    A Delphi menutaj (&) nem szóhatár: "m&ásolás" egy szó."""
+    """Strips accents (maps to base letters) and splits into words.
+    The Delphi mnemonic marker '&' is not a word boundary: 'm&ásolás' -> one word."""
     t = t.replace("&", "")
     t = "".join(c for c in unicodedata.normalize("NFD", t) if not unicodedata.combining(c))
     return re.findall(r"[A-Za-z0-9]+", t)
@@ -102,12 +103,12 @@ def _pc(w):
 def fold(t):
     return "".join(_pc(w) for w in fold_words(t))
 
-def szeparator(c):
+def is_separator(c):
     c = c.strip()
     return c in ("", "-")
 
 # ---------------------------------------------------------------------------
-# DFM hierarchia parse
+# DFM hierarchy parser
 # ---------------------------------------------------------------------------
 
 OBJ_RE = re.compile(r"^\s*object\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(\S+)")
@@ -117,7 +118,7 @@ ON_RE = re.compile(r"^\s*(On[A-Za-z0-9]+)\s*=\s*([A-Za-z_][A-Za-z0-9_]*)\s*$", r
 FORM_RE = re.compile(r"^object\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(T[A-Za-z0-9_]+)")
 
 
-def parse_dfm(text):
+def parse_dfm(text, codepage: str = "cp1250"):
     m = FORM_RE.match(text)
     formtype = m.group(2) if m else ""
 
@@ -164,7 +165,7 @@ def parse_dfm(text):
         if pending:
             cm = CAP_RE.match(line)
             if cm:
-                p_cap = dekod_caption(cm.group(1))
+                p_cap = decode_caption(cm.group(1), codepage)
                 continue
             onm = ON_RE.match(line)
             if onm:
@@ -174,34 +175,34 @@ def parse_dfm(text):
     return items, formtype
 
 # ---------------------------------------------------------------------------
-# Nevgenerálás
+# Naming
 # ---------------------------------------------------------------------------
 
 def _pascal(words):
     return "".join(_pc(w) for w in words)
 
-def generuj_nev(own, parent_caption, parent_name):
+def make_name(own, parent_caption, parent_name):
     """Visszaadja az item-nevet vagy None-t (separator)."""
-    if szeparator(own):
+    if is_separator(own):
         return None
     own_words = fold_words(own)
     if not own_words:
         return None
 
-    # prefer: szülökontextus + own, ha nem túl hosszú
-    if parent_caption and not szeparator(parent_caption):
+    # prefer: parent caption + own, if that stays under MAX_LEN
+    if parent_caption and not is_separator(parent_caption):
         par_words = fold_words(parent_caption)
         if par_words and not _pascal(own_words).lower().startswith(_pascal(par_words).lower()):
             full = "mi" + _pascal(par_words + own_words)
             if len(full) <= MAX_LEN:
                 return full
 
-    # egyebe: csak own
+    # else: only own
     ownfull = "mi" + _pascal(own_words)
     if len(ownfull) <= MAX_LEN:
         return ownfull
 
-    # kevesbe: saját szavait vágjuk szó-keresztnél VAG_HAT alá
+    # too long: truncate own's words at a word boundary to stay under VAG_HAT
     picked = []
     total = 2
     for w in own_words:
@@ -209,29 +210,29 @@ def generuj_nev(own, parent_caption, parent_name):
             break
         picked.append(w)
         total += len(w)
-    if not picked:                      # legalább az első szó belefér
+    if not picked:                      # keep at least the first word
         picked = [own_words[0]]
     return "mi" + _pascal(picked)
 
 # ---------------------------------------------------------------------------
-# Atnevezés (szóhatár)
+# Rename (word/identifier boundary)
 # ---------------------------------------------------------------------------
 
-def szotar(text, old, new):
+def replace_ident(text, old, new):
     pat = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(old) + r"(?![A-Za-z0-9_])")
     return pat.subn(new, text)
 
-def csere_all(text, ren):
+def replace_all(text, ren):
     for old in sorted(ren.keys(), key=len, reverse=True):
-        text, _ = szotar(text, old, ren[old])
+        text, _ = replace_ident(text, old, ren[old])
     return text
 
 # ---------------------------------------------------------------------------
-# Kollízió-készletek
+# Identifier collection
 # ---------------------------------------------------------------------------
 
 IDENT_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)\b")
-def gyujt_ident(text):
+def collect_ident(text):
     s = set()
     for tok in IDENT_RE.findall(text):
         if tok.lower() in DELPHI_KEYWORDS:
@@ -240,10 +241,10 @@ def gyujt_ident(text):
     return s
 
 # ---------------------------------------------------------------------------
-# Fájlok gyűjtése
+# File collection
 # ---------------------------------------------------------------------------
 
-def fájlok(mappa):
+def collect_files(mappa):
     out = []
     for root, dirs, files in os.walk(mappa):
         dirs[:] = [d for d in dirs if d not in SKIP_DIRS
@@ -255,7 +256,7 @@ def fájlok(mappa):
     out.sort()
     return out
 
-def parner_pas(dfm):
+def partner_pas(dfm):
     stem = os.path.splitext(os.path.basename(dfm))[0].lower()
     d = os.path.dirname(dfm)
     try:
@@ -267,64 +268,64 @@ def parner_pas(dfm):
     return None
 
 # ---------------------------------------------------------------------------
-# Fő
+# Main
 # ---------------------------------------------------------------------------
 
-def fo(mappa, apply, keep_mi=False):
+def run(mappa, apply, keep_mi=False, codepage="cp1250"):
     mappa = os.path.abspath(mappa)
-    files = fájlok(mappa)
+    files = collect_files(mappa)
     dfms = [f for f in files if f.lower().endswith(".dfm")]
 
     def rel(p):
         return os.path.relpath(p, mappa)
 
-    report = []      # sorok
-    tsv = []         # (rel, old, new) - item-ek
-    tsv_h = []       # (rel, old, new) - handler-ek
+    report = []      # report lines
+    tsv = []         # (rel, old, new) - items
+    tsv_h = []       # (rel, old, new) - handlers
     form_count = 0
     form_renamed = 0
 
     for dfm in dfms:
         try:
-            text, enc = leolvas(dfm)
+            text, enc = read_file(dfm, codepage)
         except (OSError, UnicodeDecodeError) as e:
             report.append(f"\n[hiba] {rel(dfm)}: {e}")
             continue
-        items, formtype = parse_dfm(text)
+        items, formtype = parse_dfm(text, codepage)
         if not items:
             continue
         form_count += 1
 
         byname = {it["name"]: it for it in items}
-        pas = parner_pas(dfm)
+        pas = partner_pas(dfm)
         pas_text = ""
         pas_enc = ""
         if pas:
             try:
-                pas_text, pas_enc = leolvas(pas)
+                pas_text, pas_enc = read_file(pas, codepage)
             except (OSError, UnicodeDecodeError):
                 pass
 
-        # Kollízió-készlet: meglévő dfm+pas azonosítók + item-nevek
+        # taken set: existing dfm+pas identifiers + item names
         taken = set(byname.keys())
-        taken |= gyujt_ident(text)
+        taken |= collect_ident(text)
         if pas:
-            taken |= gyujt_ident(pas_text)
+            taken |= collect_ident(pas_text)
         taken -= set(it["name"] for it in items)  # a most atnevezett nevek
         taken = set(t for t in taken if t.lower() not in DELPHI_KEYWORDS)
 
-        # 1) item-atnevezés
+        # 1) rename items
         ren_item = {}
         for it in items:
             old = it["name"]
             if keep_mi and old.lower().startswith("mi"):
                 continue
-            new = generuj_nev(it["caption"],
+            new = make_name(it["caption"],
                               byname[it["parent"]]["caption"] if it["parent"] and it["parent"] in byname else "",
                               "" )
             if new is None or new == old:
                 continue
-            # kollízió + azonosító-kerülés
+            # collision avoidance
             cand = new
             if cand in taken:
                 i = 1
@@ -334,7 +335,7 @@ def fo(mappa, apply, keep_mi=False):
             taken.add(cand)
             ren_item[old] = cand
 
-        # 2) handler-atnevezés
+        # 2) rename handlers
         ren_handler = {}
         for it in items:
             if it["name"] not in ren_item:
@@ -349,21 +350,21 @@ def fo(mappa, apply, keep_mi=False):
                     if nh != handler:
                         ren_handler[handler] = nh
 
-        # Csak akkor érintett a form, ha van legalább 1 átnevezés
+        # only affected if there is at least 1 rename
         if not ren_item:
             continue
         form_renamed += 1
 
-        # 3) Apply: csere a textben (handler elől, item után)
-        new_dfm = csere_all(text, ren_handler)
-        new_dfm = csere_all(new_dfm, ren_item)
+        # 3) apply replacements in text (handlers first, then items)
+        new_dfm = replace_all(text, ren_handler)
+        new_dfm = replace_all(new_dfm, ren_item)
         new_pas = pas_text
         if pas:
-            new_pas = csere_all(pas_text, ren_handler)
-            new_pas = csere_all(new_pas, ren_item)
+            new_pas = replace_all(pas_text, ren_handler)
+            new_pas = replace_all(new_pas, ren_item)
 
         # Riport
-        report.append(f"\nfájl: {rel(dfm)}  (form: {formtype})")
+        report.append(f"\nfile: {rel(dfm)}  (form: {formtype})")
         for old, new in [(it["name"], ren_item[it["name"]]) for it in items if it["name"] in ren_item]:
             cap = byname[old]["caption"]
             report.append(f"  {old:<40} -> {new:<46} | caption: {cap}")
@@ -373,10 +374,10 @@ def fo(mappa, apply, keep_mi=False):
                 if not tt:
                     continue
                 db += len(re.findall(r"(?<![A-Za-z0-9_])" + re.escape(old) + r"(?![A-Za-z0-9_])", tt))
-            report.append(f"  [handler] {old:<38} -> {new:<44} ({db} hivatkozás)")
-        seps = [it["name"] for it in items if szeparator(it["caption"])]
+            report.append(f"  [handler] {old:<38} -> {new:<44} ({db} references)")
+        seps = [it["name"] for it in items if is_separator(it["caption"])]
         if seps:
-            report.append(f"  (separatorok nem érintett: {', '.join(seps)})")
+            report.append(f"  (separators untouched: {', '.join(seps)})")
 
         for old, new in [(it["name"], ren_item[it["name"]]) for it in items if it["name"] in ren_item]:
             tsv.append(f"{rel(dfm)}\t{old}\t{new}")
@@ -386,22 +387,22 @@ def fo(mappa, apply, keep_mi=False):
         if apply:
             stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             shutil.copy2(dfm, dfm + f".bak-{stamp}")
-            beiras(dfm, new_dfm, enc)
+            write_file(dfm, new_dfm, enc)
             if pas and new_pas != pas_text:
                 shutil.copy2(pas, pas + f".bak-{stamp}")
-                beiras(pas, new_pas, pas_enc)
+                write_file(pas, new_pas, pas_enc)
 
     date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-    mode = "ELES ATNEVEZES" if apply else "DRY-RUN (nem irta a fájlokat)"
+    mode = "LIVE RENAME" if apply else "DRY-RUN (files not written)"
     if not report:
-        report = ["", f"Nem talaloz atnevezendo menu-elem {mappa} alatt.", ""]
+        report = ["", f"No menu items to rename under {mappa}.", ""]
     header = (
-        "# menu_rename riport\n"
-        f"# mód: {mode}\n"
-        f"# mappa: {mappa}\n"
-        f"# idő: {date}\n"
-        f"# formok ezesé: {form_count}; atnezett form: {form_renamed}\n\n"
-        "# TSV mapping: {rel_dfmpath}\tregi\tuj\n"
+        "# menu_rename report\n"
+        f"# mode: {mode}\n"
+        f"# dir: {mappa}\n"
+        f"# time: {date}\n"
+        f"# forms scanned: {form_count}; forms renamed: {form_renamed}\n\n"
+        "# TSV mapping: {rel_dfmpath}\told\tnew\n"
     )
     rep = header + "\n".join(report) + "\n"
 
@@ -413,27 +414,39 @@ def fo(mappa, apply, keep_mi=False):
 
     print(mode)
     print(rep)
-    print("Raport:   " + rep_path)
+    print("Report:   " + rep_path)
     print("Mapping:  " + tsv_path)
     if apply:
-        print("\nBiztonsági mentések: *.bak-<dátum>")
+        print("\nBackups: *.bak-<timestamp>")
 
 
 def main():
     args = sys.argv[1:]
-    apply = "--apply" in args
+    apply   = "--apply" in args
     keep_mi = "--keep-mi" in args
+
+    # optional: --codepage <name>   (default: cp1250)
+    codepage = "cp1250"
+    if "--codepage" in args:
+        i = args.index("--codepage")
+        if i + 1 >= len(args):
+            print("Error: --codepage requires a value, e.g. cp1251")
+            sys.exit(1)
+        codepage = args[i + 1]
+        args = args[:i] + args[i + 2:]
+
     args = [a for a in args if a not in ("--apply", "--keep-mi")]
     if len(args) != 1 or not os.path.isdir(args[0]):
         print(__doc__)
-        print("használat: python3 menu_rename.py <mappa> [--apply] [--keep-mi]")
+        print("usage: python3 menu_rename.py <dir> [--apply] [--keep-mi] [--codepage CP]")
         sys.exit(1)
     mappa = args[0]
     if not apply:
-        extra = ",  mi* nevek ertek" if keep_mi else ""
-        print("=== DRY-RUN MODO ===  (csak raport,  semmit nem ír)  "
-               "--- --apply: eles atnevezés ===" + extra, "\n")
-    fo(mappa, apply, keep_mi)
+        cp_note = f", codepage={codepage}" if codepage != "cp1250" else ""
+        extra = ", keeping existing mi* names" if keep_mi else ""
+        print("=== DRY-RUN ===  (report/mapping only, nothing written)  "
+               f"--- --apply: live rename ==={extra}{cp_note}", "\n")
+    run(mappa, apply, keep_mi, codepage=codepage)
 
 
 if __name__ == "__main__":

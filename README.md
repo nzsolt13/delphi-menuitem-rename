@@ -24,10 +24,11 @@ The tool writes two outputs into the target directory:
 ## Usage
 
 ```bash
-python3 menu_rename.py <dir>                   # DRY-RUN: report/mapping only, no writes
-python3 menu_rename.py <dir> --apply           # LIVE: rename .pas and .dfm files
-python3 menu_rename.py <dir> --keep-mi         # keep items already named mi…
-python3 menu_rename.py <dir> --apply --keep-mi # LIVE + keep-mi
+python3 menu_rename.py <dir>                     # DRY-RUN: report/mapping only, no writes
+python3 menu_rename.py <dir> --apply             # LIVE: rename .pas and .dfm files
+python3 menu_rename.py <dir> --keep-mi           # keep items already named mi…
+python3 menu_rename.py <dir> --codepage cp1251   # read DFM #ddd escapes with cp1251
+python3 menu_rename.py <dir> --apply --keep-mi   # LIVE + keep-mi
 ```
 
 `<dir>` is the root of a Delphi project (or any directory containing
@@ -38,6 +39,11 @@ python3 menu_rename.py <dir> --apply --keep-mi # LIVE + keep-mi
 |------|--------|
 | `--apply` | actually modify files (with timestamped backup copies) |
 | `--keep-mi` | skip items whose current name already starts with `mi…` (and their handlers) |
+| `--codepage CP` | code page used when decoding `#ddd` escapes (and any non-UTF‑8 raw bytes) in `.dfm`/`.pas`. Default: `cp1250` (Hungarian). Use `cp1251` for Cyrillic, `cp1252` for Western-European Latin, etc. |
+
+> **Note**: a value in `#ddd` that is `> 255` is always treated as a
+> Unicode codepoint (Delphi 2005+ DFM style); `≤ 255` is decoded with the
+> chosen code page.
 
 `--keep-mi` is useful when a previous run already produced `mi…` names you
 want to keep, while still renaming the remaining (still-generated) names.
@@ -94,11 +100,13 @@ The new name is built from the caption, prefixed with `mi`:
 
 ## Encodings
 
-- `.dfm`: written back in the same encoding it was read.
-- `.pas`: detects UTF-8 (with or without BOM) or cp1250 (Hungarian ANSI);
-  the output is written back in the same encoding.
-- **CRLF/line endings**: the tool preserves the original line-ending
-  characters; only the identifiers are replaced.
+- `.dfm`: written back in the same encoding it was read. `#ddd` escapes
+  with `d ≤ 255` are decoded with the `--codepage` setting (default `cp1250`);
+  `d > 255` are treated as Unicode codepoints.
+- `.pas`: detects UTF-8 (with or without BOM) or the configured code page
+  (default cp1250 / Hungarian ANSI); the output is written back in the same
+  encoding.
+- **CRLF/line endings**: preserved; only the identifiers are replaced.
 
 ## Sample report (short)
 
