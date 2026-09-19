@@ -1,101 +1,109 @@
 # menu_rename
 
-Delphi `TMenuItem`-ek átnevező eszköze. A Delphi Designer a generált
-menüpontok nevénél az ékezetes karaktereket lecsupaszolja, ezért a magyar
-caption-ek torzulnak: pl. "Összesen (nettó)" → `sszen1`, "Súgó" → `Sg1`,
-"Áfakulcs megadás" → `fakulcsmegads1`. Ezek nehezen olvashatóak, és a
-`Caption`ból már nem állítható vissza a szándék.
+A renaming tool for Delphi `TMenuItem` components.
 
-Ez a szerszág rekurzívan átnézi a megadott mappában a `.pas` és `.dfm`
-fájlokat, és a generált nevű menüpontokat új, ékezet nélküli, olvasható `mi…`
-nevekre cseréli (a caption alapján), a hozzájuk tartozó eseménykezelők
-(`Click` stb.) neveit is, valamint az összes más hivatkozást (`.pas` deklaráció,
-implementáció, hívás; `.dfm` `OnClick=`/`OnDblClick=`). A separátor menüpontokat
-(üres vagy `-` caption) nem érinti.
+The Delphi Designer strips non-ASCII characters out of generated menu-item
+names, so non-English captions (e.g. Hungarian) get mangled: "Összesen
+(nettó)" becomes `sszen1`, "Súgó" becomes `Sg1`, "Áfakulcs megadás" becomes
+`fakulcsmegads1`. These names are hard to read, and the original intent of the
+`Caption` can no longer be recovered from them.
 
-Két kimenetet ír a cél mappába:
+This tool walks given directories recursively, finds `.pas` and `.dfm` files,
+and renames generated menu-item names to clean, readable, ASCII-only `mi…`
+names derived from the caption. It also renames the associated event handlers
+(`Click`, etc.) and all references (`.pas` declarations and implementations,
+call sites, plus `.dfm` `OnClick=`/`OnDblClick=` assignments). Separator
+items (empty or `-` caption) are left untouched.
 
-- `menu_rename_report.txt` – ember-olvasható riport
-- `menu_rename_mapping.tsv` – gépi `relatív_útvonal<TAB>regi<TAB>új`, az
-  adatbázis "kedvenc menüpontjai" táblájának átkódolásához
+The tool writes two outputs into the target directory:
 
-## Használat
+- `menu_rename_report.txt` – a human-readable report
+- `menu_rename_mapping.tsv` – machine-readable `rel_path<TAB>old<TAB>new`,
+  useful for migrating the database "favorite menu items" table
+
+## Usage
 
 ```bash
-python3 menu_rename.py <mappa>                   # DRY-RUN: csak riport/mapping, nem ír
-python3 menu_rename.py <mappa> --apply           # ÉLES: átnevezi a .pas és .dfm fájlokat
-python3 menu_rename.py <mappa> --keep-mi         # a már mi…-vel kezdődő nevek nem változnak
-python3 menu_rename.py <mappa> --apply --keep-mi # ÉLES + keep-mi
+python3 menu_rename.py <dir>                   # DRY-RUN: report/mapping only, no writes
+python3 menu_rename.py <dir> --apply           # LIVE: rename .pas and .dfm files
+python3 menu_rename.py <dir> --keep-mi         # keep items already named mi…
+python3 menu_rename.py <dir> --apply --keep-mi # LIVE + keep-mi
 ```
 
-`<mappa>` a Delphi projekt gyökerének elérési útja. A szerszág rekurzívan bejárt,
-`.git`, `bin`, `__pycache__` mappákat kihagyva.
+`<dir>` is the root of a Delphi project (or any directory containing
+`.pas`/`.dfm` files). The walk is recursive and skips `.git`, `bin`, and
+`__pycache__` directories.
 
-| flag | hatás |
-|------|-------|
-| `--apply` | írja a fájlokat (biztonsági másolattal) |
-| `--keep-mi` | az eddigi `mi…`-vel kezdődő menüpontok és eseménykezelőik kikerülik az átnevezést |
+| flag | effect |
+|------|--------|
+| `--apply` | actually modify files (with timestamped backup copies) |
+| `--keep-mi` | skip items whose current name already starts with `mi…` (and their handlers) |
 
-`--keep-mi` akkor hasznos, ha egy korábbi futás már adott `mi…` nevet, amit most
-meg akarsz őrizni, miközben a többi (még generált nevű) elemet átnevezed.
+`--keep-mi` is useful when a previous run already produced `mi…` names you
+want to keep, while still renaming the remaining (still-generated) names.
 
-### Biztonság
+### Safety
 
-- alapértelmezésben DRY-RUN: a fájlokat nem módosítja, csak riportot és TSV-t ír;
-- `--apply` futás előtt minden módosított `.pas`/`.dfm`-fájlból
-  `.bak-<éév-hó-nap>_<óó-pp-mm>` másolat készül, így bármikor visszavonható;
-- a kimeneti fájlok (report, tsv, `.bak*`) a `.gitignore`-ban vannak, nem kerülnek
-  git-be; a Delphi forrásfájlokat a saját git-repódban kezeled (a szerszág azokat
-  nem versionzi).
+- The default mode is DRY-RUN: files are not modified, only the report and
+  mapping TSV are written.
+- With `--apply`, a `.bak-<YYYYMMDD_HHMMSS>` backup of every modified
+  `.pas`/`.dfm` file is created before writing, so changes are always
+  revertible.
+- Output files (`report`, `tsv`, `.bak*`) are listed in `.gitignore` and are
+  not committed. Delphi source files stay in your own project repo (this
+  tool does not version them).
 
-## Eseménykezelők / hivatkozások
+## Event handlers / references
 
-- Ha egy átnevezett menüpont `OnClick = X…Click` (másik `On*` is) event-re
-  köti, a szerszág a kezelő névét is átírja az új név szerint, és minden
-  hivatkozást (`.pas` deklaráció + implementáció, `.dfm` `On*` assignment, valamint
-  bármely más objektum, amely ugyanazt a kezelőt hívja – pl. gombok).
-- Egy nem-`TMenuItem` objektum (gomb, grid) `OnClick=…Click` value is átíródik,
-  ha a kezelő az átnevezett menüpont nevével kezdődik.
-- A csere Pascal-azonosító-határok között történik: `Form1.sszsen1` pontozott
-  hozzáférés is átíródik, de `sssen1X` (rész-szó) nem.
+- If a renamed menu item has `OnClick = X…Click` (or any `On*=`), the
+  handler name is rewritten according to the new item name, and every
+  reference to that handler is updated: `.pas` declaration and
+  implementation, `.dfm` `On*=` assignments, plus any other object that
+  calls the same handler (e.g. a button).
+- A non-`TMenuItem` object's (button, grid) `OnClick=…Click` value is also
+  rewritten if that handler's name starts with the renamed item's name.
+- Replacement happens only at Pascal identifier boundaries: dotted access
+  like `Form1.sszsen1` is rewritten, but a partial match like `sszen1X` is
+  not.
 
-## Névgenerálás szabályai
+## Naming rules
 
-Az új név a captionból épül, `mi` prefixszel:
+The new name is built from the caption, prefixed with `mi`:
 
-1. **Ékezet-eltávolítás**: az ékezetet alap-hangra cseréli (á→a, é→e, í→i, ó→o,
-   ú→u, ö/ő→o, ü/ű→u), a többi nem-betű karaktert (központ, kötőjel, zárójel,
-   `&`, ...) elhagyja. "Összesen (nettó)" → `OsszesenNetto`.
-2. **PascalCase**: minden szav nagy kezdőbetűvel.
-3. **Szülő-kontextus**: ha a menüpont közvetlen szülője is menüpont, és a szülő
-   captionje nincs a gyermek captionjében, akkor a szülő caption fold-olt neve
-   prefixként bekapcsolódik – így kerül el a két azonos captionű menüpont
-   ütközése.
- 4. **Hossz-szabály** (>60 karakter): ilyenkor szavakban vágja, legfeljebb 58
-    karakterig, hogy olvasható maradjon.
-5. **Ütközés**: ha az így kapott név a formon belül máshol is fennáll (másik
-   menüpont vagy bármely más azonosító), a szerszág `1`, `2`, … számot ad.
-   A szülő-kontextus és a számozás együtt garantálja, hogy a formon belül két
-   menüpont ne kapja ugyanazt a nevet.
+1. **Deaccent**: accented letters are mapped to their base form (á→a, é→e,
+   í→i, ó→o, ú→u, ö/ő→o, ü/ű→u); other non-alphabetic characters (space,
+   punctuation, parentheses, `&`, …) are discarded. "Összesen (nettó)" →
+   `OsszesenNetto`.
+2. **PascalCase**: each word is capitalized.
+3. **Parent context**: if the direct parent is also a menu item and the
+   child's caption does not already start with the parent's caption, the
+   parent's caption (folded) is prepended — this avoids collisions between
+   two items with the same caption.
+4. **Length limit** (>60 chars): the name is truncated at a word boundary,
+   keeping at most 58 characters, to stay readable.
+5. **Collisions**: if the resulting name already exists within the same form
+   (another menu item or any other identifier), a `1`, `2`, … suffix is
+   appended. Parent context plus suffixing guarantees two items in the same
+   form never end up with the same name.
 
-> **Megjegyzés**: a kézilag átnevezett, szép neveket (pl. `miExcelFajlBetoltese`,
-> `TetelekOsszesen`, `miTORfunkciok`) is átírja, ha azok nem egyeznek meg a
-> caption alapú nével (ez a "minden menüpontot átnevezzük" szabály). Ha egy
-> meglévő szép nevet szeretnél megtartani, a riportot ellenőrizd, mielőtt
-> `--apply`-t futtasz.
+> **Note**: items that were already manually renamed (e.g.
+> `miExcelFajlBetoltese`, `TetelekOsszesen`) are also renamed if they do not
+> match the caption-derived name — that is the "rename every item" rule. If
+> you want to keep a specific existing name, check the report before running
+> `--apply`.
 
-## Kódolás
+## Encodings
 
-- `.dfm`: az eredeti kódolás csomagjában írja vissza.
-- `.pas`: UTF-8 (BOM-mal vagy BOM-nélkül) vagy cp1250 (magyar ANSI) detektálás;
-  a kiírás ugyanabban a kódolásban történik, mint a beolvasás.
-- **CRLF**: a sorvég-megőrzésen dolgozik, csak az azonosítókat cseréli, a
-  sorvég-characterokat nem.
+- `.dfm`: written back in the same encoding it was read.
+- `.pas`: detects UTF-8 (with or without BOM) or cp1250 (Hungarian ANSI);
+  the output is written back in the same encoding.
+- **CRLF/line endings**: the tool preserves the original line-ending
+  characters; only the identifiers are replaced.
 
-## Riport példa (rövid)
+## Sample report (short)
 
 ```
-fájl: menu-rename/u_biz_tetel.dfm  (form: TAbl_biz_tetel)
+file: menu-rename/u_biz_tetel.dfm  (form: TAbl_biz_tetel)
   Mgsem1                  ->  miMegsem                 | caption: Mégsem
   Mgsem2                  ->  miMegsem1                | caption: Mégsem
   Sg1                     ->  miSugo                   | caption: Súgó
@@ -104,15 +112,15 @@ fájl: menu-rename/u_biz_tetel.dfm  (form: TAbl_biz_tetel)
   fakulcsmegads1          ->  miAfakulcsMegadas        | caption: Áfakulcs megadás
   sszenblegysgrszmts1     ->  miOsszenbolEgysegarSzamitasO | caption: Osszenbol egysegar szamitas (o)
   ...
-  [handler] Engedmny1Click        -> miEngedmenyClick        (4 hivatkozás)
-  [handler] fakulcsmegads1Click   -> miAfakulcsMegadasClick  (3 hivatkozás)
-  (separatorok nem érintett: N1)
+  [handler] Engedmny1Click        -> miEngedmenyClick        (4 references)
+  [handler] fakulcsmegads1Click   -> miAfakulcsMegadasClick  (3 references)
+  (separators untouched: N1)
 
-Összesen: X menüpont, Y handler, Z form.
+Summary: X items, Y handlers, Z forms.
 ```
 
-A TSV soraiba: `u_biz_tetel.dfm<TAB>Mgsem1<TAB>miMegsem`. Így SQL-ben is
-használd az adatbázis "kedvenc menüpontjai" táblájának frissítéséhez:
+TSV rows look like `u_biz_tetel.dfm<TAB>Mgsem1<TAB>miMegsem`. You can feed
+this into a DB migration, e.g.:
 
 ```sql
 UPDATE kedvencmenu
@@ -123,20 +131,22 @@ FROM (
 WHERE kedvencmenu.nev = m.old;
 ```
 
-## Fájlstruktúra
+## File layout
 
 ```
 menu-rename/
-  menu_rename.py         – a szerszág
-  README.md              – ez a fájl
-  .gitignore             – tesztfájlok, riport, tsv, .bak
-  u_biz_tetel.dfm/.pas   – gitignored (teszt)
-  U_FORG.dfm/.PAS        – gitignored (teszt)
+  menu_rename.py         – the tool
+  README.md              – this file
+  .gitignore             – test fixtures, report, tsv, .bak
+  u_biz_tetel.dfm/.pas   – gitignored (test fixture)
+  U_FORG.dfm/.PAS        – gitignored (test fixture)
 ```
 
 ## Git
 
-- A `menu-rename/` mappa git-repo; a `menu_rename.py` és `README.md` versionzódik.
-- A szerszág nem commit-el; a commit-ot te teszed meg.
-- A `.gitignore` kizárja a Delphi tesztfájlokat (`.pas`, `.dfm`), a riportokat
-  (`menu_rename_report.txt`, `menu_rename_mapping.tsv`) és a `.bak*` mentéseket.
+- `menu-rename/` is its own git repo; `menu_rename.py` and `README.md` are
+  versioned.
+- The tool never commits on your behalf.
+- The `.gitignore` excludes the Delphi fixtures (`.pas`, `.dfm`), the report
+  (`menu_rename_report.txt`, `menu_rename_mapping.tsv`) and any `.bak*`
+  backups.
