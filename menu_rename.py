@@ -302,12 +302,24 @@ def run(mappa, apply, keep_mi=False, codepage="cp1250"):
     def rel(p):
         return os.path.relpath(p, mappa)
 
+    read_cache = {}
+    def read_cached(path):
+        if path not in read_cache:
+            read_cache[path] = read_file(path, codepage)
+        return read_cache[path]
+
     report = []      # report lines
     tsv = []         # (rel, old, new) - items
     tsv_h = []       # (rel, old, new) - handlers
     form_count = 0
     form_renamed = 0
+    parsed = []      # Phase-1 results: one dict per renamed form
+    all_pascal = [f for f in files if f.lower().endswith(".pas")]
+    all_dfm = [f for f in files if f.lower().endswith(".dfm")]
 
+    # =========================================================================
+    # Phase 1: parse every form, compute item + handler renames.  No writing.
+    # =========================================================================
     for dfm in dfms:
         try:
             text, enc = read_file(dfm, codepage)
@@ -386,34 +398,124 @@ def run(mappa, apply, keep_mi=False, codepage="cp1250"):
             new_pas = replace_all(pas_text, ren_handler)
             new_pas = replace_all(new_pas, ren_item)
 
-        # Riport
-        report.append(f"\nfile: {rel(dfm)}  (form: {formtype})")
-        for old, new in [(it["name"], ren_item[it["name"]]) for it in items if it["name"] in ren_item]:
-            cap = byname[old]["caption"]
-            report.append(f"  {old:<40} -> {new:<46} | caption: {cap}")
-        for old, new in sorted(ren_handler.items()):
-            db = 0
-            for tt in [text, pas_text]:
-                if not tt:
-                    continue
-                db += len(re.findall(r"(?<![A-Za-z0-9_])" + re.escape(old) + r"(?![A-Za-z0-9_])", tt))
-            report.append(f"  [handler] {old:<38} -> {new:<44} ({db} references)")
-        seps = [it["name"] for it in items if is_separator(it["caption"])]
-        if seps:
-            report.append(f"  (separators untouched: {', '.join(seps)})")
-
         for old, new in [(it["name"], ren_item[it["name"]]) for it in items if it["name"] in ren_item]:
             tsv.append(f"{rel(dfm)}\t{old}\t{new}")
         for old, new in sorted(ren_handler.items()):
             tsv_h.append(f"{rel(dfm if dfm else '')}\t{old}\t{new}")
 
+        # keep all state for the later report / cross-form safety / apply phases
+        parsed.append({
+            "dfm": dfm, "text": text, "enc": enc, "formtype": formtype,
+            "items": items, "byname": byname,
+            "pas": pas, "pas_text": pas_text, "pas_enc": pas_enc,
+            "ren_item": ren_item, "ren_handler": ren_handler,
+            "new_dfm": new_dfm, "new_pas": new_pas,
+            "seps": [it["name"] for it in items if is_separator(it["caption"])],
+        })
+
+    # =========================================================================
+    # Phase 2: cross-form handler safety.
+    # A handler can be safely renamed in EVERY .pas/.dfm only if exactly one
+    # form in the parsed set declares it (procedure/function [Unit.]Handler( )
+    # or a class-qualified call like  Unit.Handler(  ).  If two forms define
+    # their own handler with the same identifier (Delphi only guarantees
+    # uniqueness PER unit), a blind global replace would corrupt the other
+    # one, so those stay local and must be reviewed manually.
+    # =========================================================================
+    global_handler = {}   # old -> new, safe to rename across the whole project
+    ambig_handler = {}    # old -> new, declared by more than one form
+    all_form_handlers = {}
+    for p in parsed:
+        for old in p["ren_handler"]:
+            all_form_handlers.setdefault(old, set()).add(p["dfm"])
+    for p in parsed:
+        own = p["ren_handler"]
+        for old in own:
+            if old not in all_form_handlers or len(all_form_handlers[old]) == 1:
+                # only one form in the project owns a handler named `old`
+                # -> every occurrence is a ref to THIS handler, safe to rename
+                # across the whole project (including cross-unit calls like
+                #  Unit.ClassHandler(  or  Class.ClassHandler(  ).
+                global_handler[old] = own[old]
+            else:
+                ambig_handler[old] = own[old]
+
+    # The set of .pas/.dfm files that a global handler rename will reach
+    # beyond the owning form's own pair (drives the "also updated" reporting).
+    global_target = [f for f in sorted(set(all_pascal) | set(all_dfm))]
+
+    # =========================================================================
+    # Phase 3 + 4: build per-form report, apply renames, then global handler
+    # rename across the whole project.
+    # =========================================================================
+    for p in parsed:
+        dfm = p["dfm"]; text = p["text"]; enc = p["enc"]
+        items = p["items"]; byname = p["byname"]
+        pas = p["pas"]; pas_text = p["pas_text"]; pas_enc = p["pas_enc"]
+        ren_item = p["ren_item"]; ren_handler = p["ren_handler"]
+
+        report.append(f"\nfile: {rel(dfm)}  (form: {p['formtype']})")
+        for old, new in [(it["name"], ren_item[it["name"]]) for it in items if it["name"] in ren_item]:
+            cap = byname[old]["caption"]
+            report.append(f"  {old:<40} -> {new:<46} | caption: {cap}")
+        for old, new in sorted(ren_handler.items()):
+            pat = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(old) + r"(?![A-Za-z0-9_])")
+            db = 0
+            for tt in [text, pas_text]:
+                if tt:
+                    db += len(pat.findall(tt))
+            if old in global_handler:
+                report.append(f"  [handler] {old:<38} -> {new:<44} ({db} refs)  -- GLOBAL rename (single declaration, safe)")
+            else:
+                # defined by more than one unit -> per-form rename only,
+                # and any other unit that calls it must be reviewed manually.
+                other = []
+                for f in files:
+                    if f == dfm or f == pas:
+                        continue
+                    if f.lower().endswith(".dfm") or os.path.basename(f).lower().endswith(".pas"):
+                        try:
+                            tt, _ = read_cached(f)
+                        except (OSError, UnicodeDecodeError):
+                            continue
+                        c = len(pat.findall(tt))
+                        if c:
+                            other.append((rel(f), c))
+                report.append(f"  [handler] {old:<38} -> {new:<44} ({db} refs)  -- AMBIGUOUS: shared by several units, NOT renamed globally")
+                if other:
+                    lst = ", ".join(f"{pp} ({n}x)" for pp, n in other)
+                    report.append(f"          !! external refs to '{old}' NOT renamed - check manually: {lst}")
+        if p["seps"]:
+            report.append(f"  (separators untouched: {', '.join(p['seps'])})")
+
         if apply:
             stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
             shutil.copy2(dfm, dfm + f".bak-{stamp}")
-            write_file(dfm, new_dfm, enc)
-            if pas and new_pas != pas_text:
+            write_file(dfm, p["new_dfm"], enc)
+            if pas and p["new_pas"] != pas_text:
                 shutil.copy2(pas, pas + f".bak-{stamp}")
-                write_file(pas, new_pas, pas_enc)
+                write_file(pas, p["new_pas"], pas_enc)
+
+    # global handler rename: apply the safe old->new to every .pas/.dfm.
+    # Files are read fresh from disk (so per-form files already written above
+    # come back updated, where this is a no-op; the cross-referencing units are
+    # still at their old text and get updated here).
+    if apply and global_handler:
+        stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        for f in global_target:
+            if not (f.lower().endswith(".dfm") or f.lower().endswith(".pas")):
+                continue
+            try:
+                tt, fe = read_file(f, codepage)
+            except (OSError, UnicodeDecodeError):
+                continue
+            nn = tt
+            for old, new in sorted(global_handler.items(), key=lambda kv: len(kv[0]), reverse=True):
+                nn, _ = replace_ident(nn, old, new)
+            if nn != tt:
+                shutil.copy2(f, f + f".bak-global-{stamp}")
+                write_file(f, nn, fe)
+                report.append(f"  [global-handler] updated cross-form ref in {rel(f)}")
 
     date = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
     mode = "LIVE RENAME" if apply else "DRY-RUN (files not written)"
